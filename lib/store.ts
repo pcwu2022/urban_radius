@@ -1,34 +1,35 @@
 /**
  * Application state (zustand). Owns:
- *   - the regions manifest + currently selected region's nodes,
+ *   - the regions manifest + currently selected region's display nodes,
  *   - the committed tuning constant k,
- *   - the algorithm Web Worker lifecycle and its latest results.
+ *   - the latest clustering results.
  *
- * Everything runs client-side (data is fetched as static GeoJSON, computation runs
- * in the worker), so the app can be statically exported for GitHub Pages.
+ * Data processing and the Urban Radius algorithm run SERVER-SIDE (the grids are too
+ * large to ship to the browser). The client fetches:
+ *   - GET /api/population?region=…        → bounded, downsampled points for the map
+ *   - GET /api/clusters?region=…&k=…       → detected cities (algorithm output)
+ * The regions manifest is a small static file under /data.
  */
 
 import { create } from "zustand";
-import {
-  regionGeojsonUrl,
-  regionsManifestUrl,
-} from "./dataConfig";
+
+import { ACTIVE_CONFIG, assetUrl, regionsManifestUrl } from "./dataConfig";
 import type {
   Cluster,
-  PopFeatureCollection,
   PopNode,
   RegionInfo,
   RegionsManifest,
   WorkerOutput,
-  WorkerRequest,
-  WorkerResponse,
 } from "./types";
 
-export const DEFAULT_K = 30;
-export const K_MIN = 2;
-export const K_MAX = 200;
-export const EPSILON_KM = 0.05;
-export const ALPHA = 1;
+// k spans several orders of magnitude in effect, so the UI slider is logarithmic
+// over this range (see Sidebar).
+export const K_MIN = 0.01;
+export const K_MAX = 100;
+export const DEFAULT_K = 10;
+
+// Surfaced for display; the actual radius floor is applied server-side.
+export const MIN_RADIUS_KM = Math.max(1, ACTIVE_CONFIG.averageEdgeLengthKm * 0.1);
 
 type DataStatus = "idle" | "loading" | "ready" | "error";
 type ComputeStatus = "idle" | "computing" | "done" | "error";
@@ -54,50 +55,46 @@ interface AppState {
   activeRegion: () => RegionInfo | null;
 }
 
-// --- Worker singleton (created lazily, browser only) ------------------------
-
-let worker: Worker | null = null;
-let requestSeq = 0;
-let latestRequestId = 0;
-
-function getWorker(): Worker | null {
-  if (typeof window === "undefined") return null;
-  if (!worker) {
-    worker = new Worker(new URL("./algorithm.worker.ts", import.meta.url));
-    worker.onmessage = (e: MessageEvent<WorkerResponse>) => {
-      const msg = e.data;
-      // ignore stale results from superseded requests
-      if (msg.requestId !== latestRequestId) return;
-      if (msg.type === "result") {
-        useStore.setState({
-          clusters: msg.payload.clusters,
-          meta: msg.payload.meta,
-          computeStatus: "done",
-          computeError: undefined,
-        });
-      } else if (msg.type === "error") {
-        useStore.setState({
-          computeStatus: "error",
-          computeError: msg.message,
-        });
-      }
-    };
-  }
-  return worker;
+function apiUrl(path: string, params: Record<string, string>): string {
+  const qs = new URLSearchParams(params).toString();
+  return `${assetUrl(path)}?${qs}`;
 }
 
-function dispatchCompute(nodes: PopNode[], k: number): void {
-  const w = getWorker();
-  if (!w || nodes.length === 0) return;
-  requestSeq += 1;
-  latestRequestId = requestSeq;
-  const req: WorkerRequest = {
-    type: "run",
-    requestId: requestSeq,
-    payload: { nodes, k, epsilon: EPSILON_KM, alpha: ALPHA },
-  };
-  useStore.setState({ computeStatus: "computing" });
-  w.postMessage(req);
+// --- Latest-wins request tracking for the clusters endpoint -----------------
+// Rapid slider changes fire overlapping requests; only the newest one should win.
+let computeSeq = 0;
+let inflight: AbortController | null = null;
+
+function dispatchCompute(slug: string, k: number): void {
+  const requestId = ++computeSeq;
+  inflight?.abort();
+  const controller = new AbortController();
+  inflight = controller;
+  useStore.setState({ computeStatus: "computing", computeError: undefined });
+
+  fetch(apiUrl("/api/clusters", { region: slug, k: String(k) }), {
+    signal: controller.signal,
+  })
+    .then(async (res) => {
+      if (!res.ok) throw new Error(`clusters HTTP ${res.status}`);
+      return (await res.json()) as WorkerOutput;
+    })
+    .then((out) => {
+      if (requestId !== computeSeq) return; // superseded
+      useStore.setState({
+        clusters: out.clusters,
+        meta: out.meta,
+        computeStatus: "done",
+        computeError: undefined,
+      });
+    })
+    .catch((err: unknown) => {
+      if (controller.signal.aborted || requestId !== computeSeq) return;
+      useStore.setState({
+        computeStatus: "error",
+        computeError: err instanceof Error ? err.message : String(err),
+      });
+    });
 }
 
 // --- Store ------------------------------------------------------------------
@@ -151,18 +148,13 @@ export const useStore = create<AppState>((set, get) => ({
       computeStatus: "idle",
     });
     try {
-      const res = await fetch(regionGeojsonUrl(slug));
-      if (!res.ok) throw new Error(`region HTTP ${res.status}`);
-      const fc: PopFeatureCollection = await res.json();
-      const nodes: PopNode[] = fc.features.map((f) => ({
-        lng: f.geometry.coordinates[0],
-        lat: f.geometry.coordinates[1],
-        population: f.properties.population,
-      }));
+      const res = await fetch(apiUrl("/api/population", { region: slug }));
+      if (!res.ok) throw new Error(`population HTTP ${res.status}`);
+      const data = (await res.json()) as { nodes: PopNode[] };
       // guard against a stale region switch resolving out of order
       if (get().regionSlug !== slug) return;
-      set({ nodes, dataStatus: "ready" });
-      dispatchCompute(nodes, get().k);
+      set({ nodes: data.nodes, dataStatus: "ready" });
+      dispatchCompute(slug, get().k);
     } catch (err) {
       if (get().regionSlug !== slug) return;
       set({
@@ -175,12 +167,12 @@ export const useStore = create<AppState>((set, get) => ({
   setK: (k: number) => {
     const clamped = Math.max(K_MIN, Math.min(K_MAX, k));
     set({ k: clamped });
-    const { nodes, dataStatus } = get();
-    if (dataStatus === "ready") dispatchCompute(nodes, clamped);
+    const { regionSlug, dataStatus } = get();
+    if (regionSlug && dataStatus === "ready") dispatchCompute(regionSlug, clamped);
   },
 
   recompute: () => {
-    const { nodes, k, dataStatus } = get();
-    if (dataStatus === "ready") dispatchCompute(nodes, k);
+    const { regionSlug, k, dataStatus } = get();
+    if (regionSlug && dataStatus === "ready") dispatchCompute(regionSlug, k);
   },
 }));

@@ -46,7 +46,7 @@ export const DATA_RESOLUTIONS: Record<string, ResolutionConfig> = {
 };
 
 // Toggle this variable to instantly target alternate resolutions across the application.
-export const ACTIVE_RESOLUTION_ID: string = "22km";
+export const ACTIVE_RESOLUTION_ID: string = "3km";
 
 export const ACTIVE_CONFIG: ResolutionConfig = DATA_RESOLUTIONS[ACTIVE_RESOLUTION_ID];
 

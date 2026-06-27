@@ -1,0 +1,101 @@
+{
+  "resolutionId": "3km",
+  "regions": [
+    {
+      "slug": "north-america",
+      "name": "North America",
+      "bbox": [
+        -170.0,
+        7.0,
+        -52.0,
+        72.0
+      ],
+      "center": [
+        -100.0,
+        40.0
+      ],
+      "zoom": 3,
+      "nodeCount": 317745
+    },
+    {
+      "slug": "south-america",
+      "name": "South America",
+      "bbox": [
+        -93.0,
+        -56.0,
+        -32.0,
+        14.0
+      ],
+      "center": [
+        -60.0,
+        -20.0
+      ],
+      "zoom": 3,
+      "nodeCount": 294028
+    },
+    {
+      "slug": "europe",
+      "name": "Europe",
+      "bbox": [
+        -25.0,
+        34.0,
+        45.0,
+        72.0
+      ],
+      "center": [
+        12.0,
+        52.0
+      ],
+      "zoom": 3.5,
+      "nodeCount": 260134
+    },
+    {
+      "slug": "africa",
+      "name": "Africa & Middle East",
+      "bbox": [
+        -20.0,
+        -36.0,
+        60.0,
+        40.0
+      ],
+      "center": [
+        20.0,
+        5.0
+      ],
+      "zoom": 3,
+      "nodeCount": 548975
+    },
+    {
+      "slug": "asia",
+      "name": "Asia",
+      "bbox": [
+        60.0,
+        5.0,
+        150.0,
+        78.0
+      ],
+      "center": [
+        100.0,
+        35.0
+      ],
+      "zoom": 3,
+      "nodeCount": 472370
+    },
+    {
+      "slug": "oceania",
+      "name": "Oceania",
+      "bbox": [
+        110.0,
+        -50.0,
+        180.0,
+        -8.0
+      ],
+      "center": [
+        145.0,
+        -28.0
+      ],
+      "zoom": 3.5,
+      "nodeCount": 92356
+    }
+  ]
+}

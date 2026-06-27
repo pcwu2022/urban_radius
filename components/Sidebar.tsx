@@ -6,6 +6,26 @@ import { ACTIVE_CONFIG } from "@/lib/dataConfig";
 import { formatKm, formatPop } from "@/lib/format";
 import { K_MAX, K_MIN, useStore } from "@/lib/store";
 
+// The slider is linear in position but logarithmic in k, since k's effect spans
+// orders of magnitude. Position runs 0..SLIDER_STEPS and maps to [K_MIN, K_MAX].
+const SLIDER_STEPS = 1000;
+const LOG_MIN = Math.log10(K_MIN);
+const LOG_MAX = Math.log10(K_MAX);
+
+function posToK(pos: number): number {
+  return Math.pow(10, LOG_MIN + (pos / SLIDER_STEPS) * (LOG_MAX - LOG_MIN));
+}
+function kToPos(k: number): number {
+  const clamped = Math.max(K_MIN, Math.min(K_MAX, k));
+  return ((Math.log10(clamped) - LOG_MIN) / (LOG_MAX - LOG_MIN)) * SLIDER_STEPS;
+}
+function formatK(k: number): string {
+  if (k >= 10) return k.toFixed(0);
+  if (k >= 1) return k.toFixed(1);
+  if (k >= 0.1) return k.toFixed(2);
+  return k.toFixed(3);
+}
+
 export default function Sidebar() {
   const k = useStore((s) => s.k);
   const setK = useStore((s) => s.setK);
@@ -16,6 +36,12 @@ export default function Sidebar() {
   const dataStatus = useStore((s) => s.dataStatus);
   const dataError = useStore((s) => s.dataError);
   const nodes = useStore((s) => s.nodes);
+  const manifest = useStore((s) => s.manifest);
+  const regionSlug = useStore((s) => s.regionSlug);
+  const region =
+    manifest && regionSlug
+      ? manifest.regions.find((r) => r.slug === regionSlug) ?? null
+      : null;
 
   // local "live" k value so dragging is smooth; commit to the store on release
   const [kDisplay, setKDisplay] = useState(k);
@@ -36,18 +62,18 @@ export default function Sidebar() {
             Tuning constant&nbsp;k
           </label>
           <span className="font-mono text-sm tabular-nums text-rose-600">
-            {kDisplay.toFixed(0)}
+            {formatK(kDisplay)}
           </span>
         </div>
         <input
           id="k-slider"
           type="range"
-          min={K_MIN}
-          max={K_MAX}
+          min={0}
+          max={SLIDER_STEPS}
           step={1}
-          value={kDisplay}
+          value={kToPos(kDisplay)}
           disabled={dataStatus !== "ready"}
-          onChange={(e) => setKDisplay(Number(e.target.value))}
+          onChange={(e) => setKDisplay(posToK(Number(e.target.value)))}
           onPointerUp={commit}
           onKeyUp={commit}
           className="w-full accent-rose-600 disabled:opacity-50"
@@ -71,7 +97,13 @@ export default function Sidebar() {
             <span className="text-slate-400">({clusters.length})</span>
           </h2>
           {busy && (
-            <span className="animate-pulse text-xs text-rose-500">computing…</span>
+            <span className="flex items-center gap-1.5 rounded-full bg-rose-600 px-2.5 py-1 text-xs font-semibold text-white shadow-sm">
+              <span
+                className="h-3 w-3 animate-spin rounded-full border-2 border-rose-200 border-t-white"
+                aria-hidden
+              />
+              {dataStatus === "loading" ? "Loading…" : "Computing…"}
+            </span>
           )}
         </div>
 
@@ -91,18 +123,22 @@ export default function Sidebar() {
               key={c.id}
               className="rounded-md border border-slate-100 bg-slate-50 px-2.5 py-1.5 text-xs"
             >
-              <div className="flex items-center justify-between">
-                <span className="font-medium text-slate-700">
-                  #{i + 1}
-                  <span className="ml-1.5 font-mono text-slate-400">
-                    {c.center.lat.toFixed(2)}, {c.center.lng.toFixed(2)}
-                  </span>
+              <div className="flex items-center justify-between gap-2">
+                <span className="min-w-0 truncate font-medium text-slate-800">
+                  <span className="mr-1 text-slate-400">#{i + 1}</span>
+                  {c.name ? (
+                    c.name
+                  ) : (
+                    <span className="italic text-slate-400">Unnamed</span>
+                  )}
                 </span>
-                <span className="font-mono text-rose-600">{formatKm(c.radiusKm)}</span>
+                <span className="shrink-0 font-mono text-rose-600">
+                  {formatKm(c.radiusKm)}
+                </span>
               </div>
-              <div className="mt-0.5 flex justify-between text-slate-500">
+              <div className="mt-0.5 flex justify-between font-mono text-[11px] text-slate-400">
+                <span>{c.center.lat.toFixed(2)}, {c.center.lng.toFixed(2)}</span>
                 <span>pop {formatPop(c.totalPopulation)}</span>
-                <span>{c.memberNodeCount} hexes</span>
               </div>
             </li>
           ))}
@@ -121,7 +157,11 @@ export default function Sidebar() {
         <p>{ACTIVE_CONFIG.name}</p>
         <p>~{ACTIVE_CONFIG.averageEdgeLengthKm} km hexagon edge</p>
         <dl className="mt-2 grid grid-cols-2 gap-x-2 gap-y-0.5">
-          <dt>Nodes loaded</dt>
+          <dt>Region nodes</dt>
+          <dd className="text-right font-mono text-slate-700">
+            {region ? region.nodeCount.toLocaleString() : "–"}
+          </dd>
+          <dt>Points shown</dt>
           <dd className="text-right font-mono text-slate-700">
             {nodes.length.toLocaleString()}
           </dd>
@@ -129,15 +169,15 @@ export default function Sidebar() {
           <dd className="text-right font-mono text-slate-700">
             {meta?.seedCount ?? "–"}
           </dd>
-          <dt>Compute time</dt>
+          <dt>Server compute</dt>
           <dd className="text-right font-mono text-slate-700">
             {meta ? `${meta.executionTimeMs} ms` : "–"}
           </dd>
         </dl>
         <p className="mt-3 leading-snug text-slate-400">
-          Cities are data-driven clusters, not administrative borders. R(c) is
-          mathematically unique and the merge step is guaranteed to terminate;
-          mean-shift convergence per seed is empirical, not guaranteed.
+          Data processing and clustering run server-side on the full grid; the map
+          shows the densest {nodes.length.toLocaleString()} points for context.
+          Cities are data-driven clusters, not administrative borders.
         </p>
       </section>
     </aside>

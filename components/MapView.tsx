@@ -76,6 +76,7 @@ function centersFeatureCollection(clusters: Cluster[]) {
       geometry: { type: "Point" as const, coordinates: [c.center.lng, c.center.lat] },
       properties: {
         id: c.id,
+        name: c.name ?? "",
         radiusKm: Math.round(c.radiusKm * 10) / 10,
         population: c.totalPopulation,
       },
@@ -182,6 +183,28 @@ export default function MapView() {
         },
       });
 
+      // Layer 2c: city name labels (only for named clusters)
+      map.addLayer({
+        id: "city-labels",
+        type: "symbol",
+        source: SRC_CENTERS,
+        filter: ["!=", ["get", "name"], ""],
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["Open Sans Regular"],
+          "text-size": 12,
+          "text-offset": [0, 1.1],
+          "text-anchor": "top",
+          "text-allow-overlap": false,
+          "text-optional": true,
+        },
+        paint: {
+          "text-color": "#881337",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+
       readyRef.current = true;
       // push whatever is already in the store
       const s = useStore.getState();
@@ -193,12 +216,13 @@ export default function MapView() {
       map.on("click", "city-centers", (e) => {
         const f = e.features?.[0];
         if (!f) return;
-        const p = f.properties as { radiusKm: number; population: number };
+        const p = f.properties as { name?: string; radiusKm: number; population: number };
         const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates;
+        const title = p.name ? p.name : "Unnamed cluster";
         popup
           .setLngLat([lng, lat])
           .setHTML(
-            `<div style="font:12px system-ui"><b>Detected city</b><br/>` +
+            `<div style="font:12px system-ui"><b>${escapeHtml(title)}</b><br/>` +
               `R = ${p.radiusKm} km<br/>` +
               `pop = ${formatPop(Number(p.population))}</div>`
           )
@@ -224,6 +248,7 @@ export default function MapView() {
   const nodes = useStore((s) => s.nodes);
   const clusters = useStore((s) => s.clusters);
   const computeStatus = useStore((s) => s.computeStatus);
+  const dataStatus = useStore((s) => s.dataStatus);
   const regionSlug = useStore((s) => s.regionSlug);
   const activeRegion = useStore((s) => s.activeRegion);
 
@@ -248,7 +273,26 @@ export default function MapView() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [regionSlug]);
 
-  return <div ref={containerRef} className="absolute inset-0" />;
+  const loadingRegion = dataStatus === "loading";
+  const computing = computeStatus === "computing";
+  const busy = loadingRegion || computing;
+  const busyLabel = loadingRegion ? "Loading region…" : "Computing cities…";
+
+  return (
+    <div ref={containerRef} className="absolute inset-0">
+      {busy && (
+        <div className="pointer-events-none absolute inset-x-0 top-4 z-10 flex justify-center">
+          <div className="pointer-events-auto flex items-center gap-2.5 rounded-full border border-rose-200 bg-white/95 px-4 py-2 text-sm font-semibold text-rose-700 shadow-lg ring-1 ring-rose-500/10 backdrop-blur">
+            <span
+              className="h-4 w-4 animate-spin rounded-full border-2 border-rose-300 border-t-rose-600"
+              aria-hidden
+            />
+            {busyLabel}
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function pushData(map: MlMap, nodes: PopNode[], clusters: Cluster[]) {
@@ -279,4 +323,12 @@ function formatPop(n: number): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(0)}k`;
   return `${n}`;
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

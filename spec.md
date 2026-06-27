@@ -269,32 +269,52 @@ The server reads the filesystem assets corresponding to `ACTIVE_CONFIG.dataPath 
 
 ---
 
-## 8. Web Worker Execution Model
+## 8. Algorithm Execution Model
 
-To guarantee uniform UI frames and interrupt-free panning, execution logic shifts out of the browser main thread context.
+Execution is kept off the UI thread so map pan/zoom stay smooth. There are two
+supported execution targets, selected by data scale:
 
-### 9.1 Worker Input Types
+* **Server-side (current default, used for the 3 km grid and finer).** The grids are
+  far too large to ship to the browser (~0.5M nodes per continent at 3 km), so data
+  processing and the algorithm run in Next.js API routes:
+  * `GET /api/population?region={slug}` — a bounded, **downsampled** set of the densest
+    points (capped, e.g. 50k) for the map's dots layer.
+  * `GET /api/clusters?region={slug}&k={k}` — runs the algorithm on the region's
+    **full** node set and returns the detected cities. Results are cached per `(region, k)`.
+  The client keeps map interactions responsive by never holding the full grid; only the
+  latest in-flight `k` request is applied (older ones are aborted).
+
+* **Web Worker (original design, viable for the coarse 22 km grid).** When the whole
+  region fits in the browser, the same pure-TS algorithm can run in a Web Worker instead,
+  with the client fetching static GeoJSON. This keeps a static-export/GitHub-Pages path open
+  for small datasets.
+
+Either way the algorithm is the same pure-TypeScript module; only where it runs differs.
+
+### 8.1 Algorithm Input
 
 ```ts
-type WorkerInput = {
+type AlgorithmInput = {
   nodes: { lng: number; lat: number; population: number }[];
   k: number;
-  epsilon: number; // Convergence tolerance for center movement (e.g., 0.05 km)
-  alpha: number;   // Damping factor for mean-shift steps (0 < alpha <= 1)
+  epsilon: number;       // Convergence tolerance for center movement (e.g., 0.05 km)
+  alpha: number;         // Damping factor for mean-shift steps (0 < alpha <= 1)
+  minRadiusKm?: number;  // Discard cities whose R is below this (>= 1 km floor); see §1.5
 };
 
 ```
 
-### 9.2 Worker Output Types
+### 8.2 Algorithm Output
 
 ```ts
-type WorkerOutput = {
+type AlgorithmOutput = {
   clusters: {
     id: string;
     center: { lng: number; lat: number };
     radiusKm: number;
     totalPopulation: number;
     memberNodeCount: number;
+    name?: string;        // assumed city name (see §10); absent => UI shows a placeholder
   }[];
   meta: {
     seedCount: number;
@@ -303,3 +323,35 @@ type WorkerOutput = {
 };
 
 ```
+
+### 8.3 Minimum-radius filter
+
+After merging (§1.5), clusters whose Urban Radius is below `minRadiusKm` are discarded as
+sub-resolution noise. The floor is `max(1 km, 10% of the hexagon edge length)`, so it is at
+least 1 km at every resolution and scales up for coarse grids.
+
+---
+
+## 10. City Naming (assumed names for the UI)
+
+Detected clusters are geometric, so they carry no names. As a final, display-only step the
+app labels each cluster with the name of a real city from a gazetteer
+(`public/data/city_names/cities50000.json`: GeoNames-style `{name, country, lat, lon, pop}`,
+all cities with population ≥ 50,000).
+
+**Algorithm (greedy, largest-city-first):**
+
+1. Sort gazetteer cities by population, descending. Walk them from largest to smallest.
+2. For the current city, find the cluster whose R-disk contains it
+   (`distance(city, center) <= R`). Because the merge step guarantees clusters never
+   overlap, a point lies inside **at most one** disk, so this is unambiguous.
+   * If that cluster is **not yet named**, set its `name` to this city and mark it named.
+   * If the containing cluster is **already named** (or the city is inside no cluster),
+     skip the city and continue.
+3. Stop when every cluster is named or the gazetteer is exhausted.
+
+Because cities are processed largest-first, each cluster ends up named after the largest
+gazetteer city inside it — e.g. a merged metro disk takes the name of its dominant city.
+Clusters that contain no gazetteer city (rural detections) remain unnamed and the UI renders
+a placeholder ("Unnamed"). Naming is `O(cities × clusters)` worst case but terminates early
+once all clusters are named.

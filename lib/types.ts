@@ -14,6 +14,17 @@ export interface Cluster {
   radiusKm: number;
   totalPopulation: number;
   memberNodeCount: number;
+  /** Assumed city name (nearest large gazetteer city inside the disk), if any. */
+  name?: string;
+}
+
+/** A gazetteer entry from public/data/city_names (GeoNames-style). */
+export interface NamedCity {
+  name: string;
+  country: string;
+  lat: number;
+  lon: number;
+  pop: number;
 }
 
 /** A region entry in the data manifest (public/data/res_<id>/regions.json). */
@@ -45,7 +56,9 @@ export interface PopFeatureCollection {
   features: PopFeature[];
 }
 
-// --- Web Worker protocol (Section 9) ----------------------------------------
+// --- Algorithm I/O (Section 9) ----------------------------------------------
+// Named Worker* for continuity with the spec; the algorithm now runs server-side
+// (see lib/serverData.ts) and these are the API request/response payload shapes.
 
 export interface WorkerInput {
   nodes: PopNode[];
@@ -54,6 +67,12 @@ export interface WorkerInput {
   epsilon: number;
   /** Damping factor for mean-shift steps, 0 < alpha <= 1. */
   alpha: number;
+  /**
+   * Discard detected cities whose Urban Radius is below this (km). Filters out
+   * sub-resolution, degenerate clusters (e.g. a 0.3 km "city"). Optional;
+   * defaults to a small floor in the algorithm.
+   */
+  minRadiusKm?: number;
 }
 
 export interface WorkerOutput {
@@ -63,15 +82,3 @@ export interface WorkerOutput {
     executionTimeMs: number;
   };
 }
-
-/** Messages posted to the worker. */
-export type WorkerRequest = {
-  type: "run";
-  requestId: number;
-  payload: WorkerInput;
-};
-
-/** Messages posted back from the worker. */
-export type WorkerResponse =
-  | { type: "result"; requestId: number; payload: WorkerOutput }
-  | { type: "error"; requestId: number; message: string };

@@ -4,8 +4,10 @@ A Next.js app that detects **data-driven cities** from global population density
 the custom **Urban Radius (R) algorithm**, and visualizes them on an interactive map.
 Cities emerge as clusters of the population data itself — not from administrative borders.
 
-Everything (data loading + the clustering computation) runs **client-side**, so the app
-exports to fully static files and can be hosted on GitHub Pages.
+Data processing and the clustering computation run **server-side** (API routes), because
+the high-resolution grids — ~0.5M nodes per continent at 3 km — are too large to ship to
+the browser. The app therefore requires a Node server (`next start`); it is not a static
+export.
 
 ## Quick start
 
@@ -44,48 +46,57 @@ high k → tight dense cores.
 
 | Piece | File | Notes |
 | --- | --- | --- |
-| Algorithm (pure TS) | `lib/algorithm.ts` | No DOM deps; runs in worker or tests |
-| Web Worker | `lib/algorithm.worker.ts` | Keeps the main thread free during recompute |
-| State + worker lifecycle | `lib/store.ts` | zustand; latest k request always wins |
+| Algorithm (pure TS) | `lib/algorithm.ts` | No DOM deps; runs on the server or in tests. Grid-based seeding + R evaluation keeps it near-linear at ~0.5M nodes |
+| Server data + algorithm | `lib/serverData.ts` | Loads/caches region nodes, runs & caches clustering. `server-only` |
+| API routes | `app/api/{population,clusters}/route.ts` | Display points (downsampled) and clustering results |
+| Client state | `lib/store.ts` | zustand; fetches the APIs, latest-k-request wins (AbortController) |
 | Resolution / data config | `lib/dataConfig.ts` | Swap `ACTIVE_RESOLUTION_ID` to retarget |
 | Map (3 layers) | `components/MapView.tsx` | MapLibre GL: points, R-circles, centers |
 | UI | `components/{Header,Sidebar}.tsx` | Region selector, k slider, results |
 
+The client never downloads the full grid. It fetches:
+- `GET /api/population?region=…` — a bounded, downsampled set of the **densest** points
+  (capped at 50k) for the dots layer;
+- `GET /api/clusters?region=…&k=…` — the algorithm output, computed server-side on the
+  **full** node set and cached per `(region, k)`.
+
 ### Data pipeline
 
-Source: the [Kontur Population Dataset](https://data.humdata.org/dataset/kontur-population-dataset-22km)
-(H3 hexagons, EPSG:3857). The raw GeoPackage lives in `data_src/` (git-ignored, **not**
-deployed). A script reprojects each hexagon centroid to lng/lat, buckets it into regions by
-bounding box, and writes static GeoJSON + a manifest the app fetches directly:
+Source: the [Kontur Population Dataset](https://data.humdata.org/dataset/kontur-population-dataset)
+(H3 hexagons, EPSG:3857). Raw GeoPackages live in `data_src/res_<id>/` (git-ignored). A script
+reprojects each hexagon centroid to lng/lat, buckets it into regions by bounding box, and writes
+per-region GeoJSON + a manifest into `public/data/res_<id>/`:
 
 ```bash
 python3 scripts/build_regions.py 22km
-# -> public/data/res_22km/<region>.geojson  +  regions.json
+python3 scripts/build_regions.py 3km    # ~280 MB of GeoJSON; read server-side, git-ignored
 ```
 
-There is intentionally **no `/api/population` server route** (the spec's API route is
-replaced by static GeoJSON) so the app stays static-host friendly.
+The server reads these files from disk (it does **not** serve the full sets to the client).
+The small per-region `regions.json` manifest is fetched directly by the client.
 
 #### Changing resolution
 
-Drop a finer GeoPackage at `data_src/res_<id>/`, add an entry to `RESOLUTIONS` in
-`scripts/build_regions.py`, regenerate, then set `ACTIVE_RESOLUTION_ID` in `lib/dataConfig.ts`.
+Drop a GeoPackage at `data_src/res_<id>/`, ensure an entry exists in `RESOLUTIONS`
+(`scripts/build_regions.py`) and `DATA_RESOLUTIONS` (`lib/dataConfig.ts`), regenerate, then
+set `ACTIVE_RESOLUTION_ID` in `lib/dataConfig.ts`. The radius filter and display cap scale
+automatically.
 
-## Build & deploy (GitHub Pages)
-
-```bash
-npm run build        # static export -> ./out
-```
-
-For a project page served under a sub-path, set the base path so asset/data URLs resolve:
+## Build & run
 
 ```bash
-BASE_PATH=/your-repo-name npm run build
+npm run build
+npm start             # Node server on :3000 (required — there is no static export)
 ```
 
-`BASE_PATH` is wired into `next.config.mjs` (`basePath`) and exposed to the client as
-`NEXT_PUBLIC_BASE_PATH`, which `lib/dataConfig.ts` prefixes onto every data fetch. Publish
-the `out/` directory (e.g. with `gh-pages -d out`).
+Optionally host under a sub-path with `BASE_PATH=/your-path` (wired into `next.config.mjs`
+and exposed as `NEXT_PUBLIC_BASE_PATH`).
+
+### Performance notes
+
+Clustering a continent at 3 km takes ~4–7 s at typical k (up to ~19 s at the extreme low-k
+end on the largest region); results are cached per `(region, k)`, so repeats are instant.
+First access to a region also parses its GeoJSON once (~1 s) and caches the nodes in memory.
 
 ## Honesty about guarantees
 

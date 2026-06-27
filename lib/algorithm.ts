@@ -276,25 +276,53 @@ function meanShift(
 // Seeding — local maxima of population density (Section 1.4)
 // ---------------------------------------------------------------------------
 
+/**
+ * Grid-based local-maximum seeding (Section 1.4 permits a grid-based check).
+ *
+ * A node seeds a candidate city iff it is the highest-population node in its 3×3
+ * block of grid cells (cells ≈ one node-spacing, so the block ≈ the immediate
+ * neighbour ring). Ties broken by lowest index for determinism. This is near-O(N)
+ * — a per-cell "best node" pass then a 9-cell lookup per node — which keeps seeding
+ * fast even at the ~0.5M-node scale of the 3 km grid (the haversine-per-node version
+ * was the dominant cost there).
+ */
 function findSeeds(grid: SpatialGrid): number[] {
-  const seedRadiusKm = 1.6 * grid.spacingKm; // ~ immediate neighbour ring
-  const seeds: number[] = [];
   const nodes = grid.nodes;
+  const cellDeg = Math.max(grid.spacingKm / 111, 1e-4);
+  type Best = { pop: number; idx: number };
+
+  // best (max population, lowest index on tie) node per cell
+  const cellBest = new Map<string, Best>();
   for (let i = 0; i < nodes.length; i++) {
-    const pop = nodes[i].population;
-    if (pop <= 0) continue;
-    const neigh = grid.neighbors(i, seedRadiusKm);
-    let isMax = true;
-    for (const j of neigh) {
-      const np = nodes[j].population;
-      // strict local max; ties broken deterministically by index to avoid
-      // emitting duplicate seeds on a flat plateau of equal populations.
-      if (np > pop || (np === pop && j < i)) {
-        isMax = false;
-        break;
+    const n = nodes[i];
+    if (n.population <= 0) continue;
+    const key = `${Math.floor(n.lng / cellDeg)},${Math.floor(n.lat / cellDeg)}`;
+    const b = cellBest.get(key);
+    if (!b || n.population > b.pop || (n.population === b.pop && i < b.idx)) {
+      cellBest.set(key, { pop: n.population, idx: i });
+    }
+  }
+
+  // a node is a seed iff it is the best node across its 3×3 cell block
+  const seeds: number[] = [];
+  for (let i = 0; i < nodes.length; i++) {
+    const n = nodes[i];
+    if (n.population <= 0) continue;
+    const cx = Math.floor(n.lng / cellDeg);
+    const cy = Math.floor(n.lat / cellDeg);
+    let bestPop = n.population;
+    let bestIdx = i;
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const b = cellBest.get(`${cx + dx},${cy + dy}`);
+        if (!b) continue;
+        if (b.pop > bestPop || (b.pop === bestPop && b.idx < bestIdx)) {
+          bestPop = b.pop;
+          bestIdx = b.idx;
+        }
       }
     }
-    if (isMax) seeds.push(i);
+    if (bestIdx === i) seeds.push(i);
   }
   return seeds;
 }
@@ -408,6 +436,7 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
   const { nodes, k } = input;
   const epsilon = input.epsilon > 0 ? input.epsilon : 0.05;
   const alpha = input.alpha > 0 && input.alpha <= 1 ? input.alpha : 1;
+  const minRadiusKm = input.minRadiusKm && input.minRadiusKm > 0 ? input.minRadiusKm : 0.5;
 
   const grid = new SpatialGrid(nodes);
 
@@ -436,9 +465,14 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
     if (!res.merged) break;
   }
 
-  // finalize: stable ids, drop empties, sort by population desc
+  // finalize: drop empties and sub-resolution cities, sort by population desc
   const out: Cluster[] = clusters
-    .filter((c) => c.radiusKm > 0 && c.memberIdx.length > 0 && c.totalPopulation > 0)
+    .filter(
+      (c) =>
+        c.radiusKm >= minRadiusKm &&
+        c.memberIdx.length > 0 &&
+        c.totalPopulation > 0
+    )
     .sort((a, b) => b.totalPopulation - a.totalPopulation)
     .map((c, i) => ({
       id: `city-${i}`,

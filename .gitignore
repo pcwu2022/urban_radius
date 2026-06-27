@@ -9,10 +9,15 @@
 *.tsbuildinfo
 next-env.d.ts
 
-# raw source data lives in data_src/ (large GeoPackages, not deployed).
-# Regenerate region GeoJSON via scripts/build_regions.py; the committed
-# public/data/**/*.geojson + regions.json are the deployable artifacts.
+# raw source data lives in data_src/ (large GeoPackages, not committed).
+# Regenerate region GeoJSON via scripts/build_regions.py.
 /data_src/
+
+# High-resolution region GeoJSON is large (3 km ≈ 280 MB) — regenerate it on the
+# server with scripts/build_regions.py rather than committing it. The small 22 km
+# files and every regions.json manifest stay committed.
+/public/data/res_3km/*.geojson
+/public/data/res_400m/*.geojson
 
 # misc
 .DS_Store
