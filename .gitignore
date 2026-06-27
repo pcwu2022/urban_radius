@@ -1,0 +1,19 @@
+# dependencies
+/node_modules
+
+# next.js
+/.next/
+/out/
+
+# build/typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# raw source data lives in data_src/ (large GeoPackages, not deployed).
+# Regenerate region GeoJSON via scripts/build_regions.py; the committed
+# public/data/**/*.geojson + regions.json are the deployable artifacts.
+/data_src/
+
+# misc
+.DS_Store
+*.log

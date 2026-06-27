@@ -1,0 +1,282 @@
+"use client";
+
+/**
+ * The interactive map (spec.md Section 7). Renders three layers over a tracking-free
+ * raster basemap:
+ *   - Layer 1: population points  (WebGL circle layer, styled by `population`)
+ *   - Layer 2a: city R boundaries (geodesic circles from @turf/circle, line + fill)
+ *   - Layer 2b: city centres      (marker circle layer)
+ *
+ * The MapLibre map is created once. Store changes only push data into existing
+ * sources / update paint properties, so pan & zoom never trigger recomputation.
+ */
+
+import { useEffect, useRef } from "react";
+import maplibregl, { type Map as MlMap, type StyleSpecification } from "maplibre-gl";
+import { circle as turfCircle } from "@turf/turf";
+import "maplibre-gl/dist/maplibre-gl.css";
+
+import { useStore } from "@/lib/store";
+import type { Cluster, PopNode } from "@/lib/types";
+
+// Key-free CARTO raster basemap (no tracking / no token).
+const BASE_STYLE: StyleSpecification = {
+  version: 8,
+  glyphs: "https://demotiles.maplibre.org/font/{fontstack}/{range}.pbf",
+  sources: {
+    carto: {
+      type: "raster",
+      tiles: [
+        "https://a.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        "https://b.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        "https://c.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+        "https://d.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png",
+      ],
+      tileSize: 256,
+      attribution:
+        '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors, © <a href="https://carto.com/attributions">CARTO</a>',
+    },
+  },
+  layers: [{ id: "carto", type: "raster", source: "carto" }],
+};
+
+const SRC_POP = "population";
+const SRC_CIRCLES = "city-circles";
+const SRC_CENTERS = "city-centers";
+
+function popFeatureCollection(nodes: PopNode[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: nodes.map((n) => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [n.lng, n.lat] },
+      properties: { population: n.population },
+    })),
+  };
+}
+
+function circlesFeatureCollection(clusters: Cluster[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: clusters.map((c) =>
+      turfCircle([c.center.lng, c.center.lat], c.radiusKm, {
+        steps: 64,
+        units: "kilometers",
+        properties: { id: c.id },
+      })
+    ),
+  };
+}
+
+function centersFeatureCollection(clusters: Cluster[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: clusters.map((c) => ({
+      type: "Feature" as const,
+      geometry: { type: "Point" as const, coordinates: [c.center.lng, c.center.lat] },
+      properties: {
+        id: c.id,
+        radiusKm: Math.round(c.radiusKm * 10) / 10,
+        population: c.totalPopulation,
+      },
+    })),
+  };
+}
+
+export default function MapView() {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const mapRef = useRef<MlMap | null>(null);
+  const readyRef = useRef(false);
+
+  // create the map once
+  useEffect(() => {
+    if (mapRef.current || !containerRef.current) return;
+    const container = containerRef.current;
+    const map = new maplibregl.Map({
+      container,
+      style: BASE_STYLE,
+      center: [10, 30],
+      zoom: 2,
+      attributionControl: { compact: true },
+    });
+    mapRef.current = map;
+    map.addControl(new maplibregl.NavigationControl({ showCompass: false }), "top-left");
+
+    // The container's final flex/absolute size may not be resolved at construction
+    // time (the map can come up at MapLibre's fallback ~400×300), so keep the canvas
+    // synced to the container. ResizeObserver fires once immediately on observe()
+    // and on every subsequent layout change (e.g. window resize).
+    const resizeObserver = new ResizeObserver(() => {
+      if (map) {
+        map.resize();
+      }
+    });
+    resizeObserver.observe(container);
+
+    // Force an immediate layout recalculation on the next animation frame
+    requestAnimationFrame(() => {
+      map.resize();
+    });
+
+    map.on("load", () => {
+      // sources
+      map.addSource(SRC_POP, { type: "geojson", data: popFeatureCollection([]) });
+      map.addSource(SRC_CIRCLES, { type: "geojson", data: circlesFeatureCollection([]) });
+      map.addSource(SRC_CENTERS, { type: "geojson", data: centersFeatureCollection([]) });
+
+      // Layer 1: population points
+      map.addLayer({
+        id: "population-points",
+        type: "circle",
+        source: SRC_POP,
+        paint: {
+          "circle-radius": [
+            "interpolate",
+            ["linear"],
+            ["get", "population"],
+            0, 1.5,
+            5000, 2.5,
+            50000, 4,
+            500000, 7,
+            5000000, 12,
+          ],
+          "circle-color": [
+            "interpolate",
+            ["linear"],
+            ["get", "population"],
+            0, "#fde725",
+            50000, "#5ec962",
+            500000, "#21918c",
+            2000000, "#3b528b",
+            8000000, "#440154",
+          ],
+          "circle-opacity": 0.65,
+          "circle-stroke-width": 0,
+        },
+      });
+
+      // Layer 2a: city R boundary (translucent fill + crisp outline)
+      map.addLayer({
+        id: "city-fill",
+        type: "fill",
+        source: SRC_CIRCLES,
+        paint: { "fill-color": "#e11d48", "fill-opacity": 0.08 },
+      });
+      map.addLayer({
+        id: "city-outline",
+        type: "line",
+        source: SRC_CIRCLES,
+        paint: { "line-color": "#e11d48", "line-width": 2, "line-opacity": 0.9 },
+      });
+
+      // Layer 2b: city centres
+      map.addLayer({
+        id: "city-centers",
+        type: "circle",
+        source: SRC_CENTERS,
+        paint: {
+          "circle-radius": 5,
+          "circle-color": "#e11d48",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2,
+        },
+      });
+
+      readyRef.current = true;
+      // push whatever is already in the store
+      const s = useStore.getState();
+      pushData(map, s.nodes, s.clusters);
+      applyDim(map, s.computeStatus === "computing");
+
+      // popup on city click
+      const popup = new maplibregl.Popup({ closeButton: false, offset: 10 });
+      map.on("click", "city-centers", (e) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        const p = f.properties as { radiusKm: number; population: number };
+        const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates;
+        popup
+          .setLngLat([lng, lat])
+          .setHTML(
+            `<div style="font:12px system-ui"><b>Detected city</b><br/>` +
+              `R = ${p.radiusKm} km<br/>` +
+              `pop = ${formatPop(Number(p.population))}</div>`
+          )
+          .addTo(map);
+      });
+      map.on("mouseenter", "city-centers", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "city-centers", () => {
+        map.getCanvas().style.cursor = "";
+      });
+    });
+
+    return () => {
+      resizeObserver.disconnect();
+      map.remove();
+      mapRef.current = null;
+      readyRef.current = false;
+    };
+  }, []);
+
+  // push node + cluster data into sources whenever they change
+  const nodes = useStore((s) => s.nodes);
+  const clusters = useStore((s) => s.clusters);
+  const computeStatus = useStore((s) => s.computeStatus);
+  const regionSlug = useStore((s) => s.regionSlug);
+  const activeRegion = useStore((s) => s.activeRegion);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+    pushData(map, nodes, clusters);
+  }, [nodes, clusters]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+    applyDim(map, computeStatus === "computing");
+  }, [computeStatus]);
+
+  // fly to region on selection change
+  useEffect(() => {
+    const map = mapRef.current;
+    const region = activeRegion();
+    if (!map || !region) return;
+    map.flyTo({ center: region.center, zoom: region.zoom, duration: 1200 });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [regionSlug]);
+
+  return <div ref={containerRef} className="absolute inset-0" />;
+}
+
+function pushData(map: MlMap, nodes: PopNode[], clusters: Cluster[]) {
+  (map.getSource(SRC_POP) as maplibregl.GeoJSONSource | undefined)?.setData(
+    popFeatureCollection(nodes)
+  );
+  (map.getSource(SRC_CIRCLES) as maplibregl.GeoJSONSource | undefined)?.setData(
+    circlesFeatureCollection(clusters)
+  );
+  (map.getSource(SRC_CENTERS) as maplibregl.GeoJSONSource | undefined)?.setData(
+    centersFeatureCollection(clusters)
+  );
+}
+
+/** Dim the cluster layers while a recomputation is in flight (Section 6.2). */
+function applyDim(map: MlMap, computing: boolean) {
+  const fill = computing ? 0.03 : 0.08;
+  const line = computing ? 0.3 : 0.9;
+  const center = computing ? 0.35 : 1;
+  if (map.getLayer("city-fill")) map.setPaintProperty("city-fill", "fill-opacity", fill);
+  if (map.getLayer("city-outline"))
+    map.setPaintProperty("city-outline", "line-opacity", line);
+  if (map.getLayer("city-centers"))
+    map.setPaintProperty("city-centers", "circle-opacity", center);
+}
+
+function formatPop(n: number): string {
+  if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
+  if (n >= 1e3) return `${(n / 1e3).toFixed(0)}k`;
+  return `${n}`;
+}

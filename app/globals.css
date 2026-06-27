@@ -1,0 +1,28 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#__next {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Force MapLibre structural view elements to span perfectly across absolute layout blocks */
+.maplibregl-map,
+.maplibregl-canvas-container,
+.maplibregl-canvas {
+  width: 100% !important;
+  height: 100% !important;
+}
+
+/* Keep the MapLibre attribution legible over the light basemap. */
+.maplibregl-ctrl-attrib {
+  font-size: 10px;
+}
