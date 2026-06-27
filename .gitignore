@@ -16,8 +16,8 @@ next-env.d.ts
 # High-resolution region GeoJSON is large (3 km ≈ 280 MB) — regenerate it on the
 # server with scripts/build_regions.py rather than committing it. The small 22 km
 # files and every regions.json manifest stay committed.
-/public/data/res_3km/*.geojson
-/public/data/res_400m/*.geojson
+# /public/data/res_3km/*.geojson
+# /public/data/res_400m/*.geojson
 
 # misc
 .DS_Store

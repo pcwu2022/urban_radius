@@ -62,7 +62,14 @@ function circlesFeatureCollection(clusters: Cluster[]) {
       turfCircle([c.center.lng, c.center.lat], c.radiusKm, {
         steps: 64,
         units: "kilometers",
-        properties: { id: c.id },
+        properties: {
+          id: c.id,
+          name: c.name ?? "",
+          radiusKm: Math.round(c.radiusKm * 10) / 10,
+          population: c.totalPopulation,
+          lng: c.center.lng,
+          lat: c.center.lat,
+        },
       })
     ),
   };
@@ -211,29 +218,44 @@ export default function MapView() {
       pushData(map, s.nodes, s.clusters);
       applyDim(map, s.computeStatus === "computing");
 
-      // popup on city click
+      // Clicking anywhere inside a cluster's disk (fill) — or its centre dot —
+      // opens a popup. The fill makes the whole circle clickable, not just the
+      // small centre marker.
       const popup = new maplibregl.Popup({ closeButton: false, offset: 10 });
-      map.on("click", "city-centers", (e) => {
+      const showPopup = (e: maplibregl.MapLayerMouseEvent) => {
         const f = e.features?.[0];
         if (!f) return;
-        const p = f.properties as { name?: string; radiusKm: number; population: number };
-        const [lng, lat] = (f.geometry as GeoJSON.Point).coordinates;
+        const p = f.properties as {
+          name?: string;
+          radiusKm: number;
+          population: number;
+          lng?: number;
+          lat?: number;
+        };
+        // anchor at the cluster centre when available (fill), else the feature point
+        const lngLat: [number, number] =
+          p.lng !== undefined && p.lat !== undefined
+            ? [Number(p.lng), Number(p.lat)]
+            : ((f.geometry as GeoJSON.Point).coordinates as [number, number]);
         const title = p.name ? p.name : "Unnamed cluster";
         popup
-          .setLngLat([lng, lat])
+          .setLngLat(lngLat)
           .setHTML(
             `<div style="font:12px system-ui"><b>${escapeHtml(title)}</b><br/>` +
               `R = ${p.radiusKm} km<br/>` +
               `pop = ${formatPop(Number(p.population))}</div>`
           )
           .addTo(map);
-      });
-      map.on("mouseenter", "city-centers", () => {
-        map.getCanvas().style.cursor = "pointer";
-      });
-      map.on("mouseleave", "city-centers", () => {
-        map.getCanvas().style.cursor = "";
-      });
+      };
+      for (const layer of ["city-fill", "city-centers"]) {
+        map.on("click", layer, showPopup);
+        map.on("mouseenter", layer, () => {
+          map.getCanvas().style.cursor = "pointer";
+        });
+        map.on("mouseleave", layer, () => {
+          map.getCanvas().style.cursor = "";
+        });
+      }
     });
 
     return () => {

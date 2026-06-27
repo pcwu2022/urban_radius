@@ -60,6 +60,17 @@ function apiUrl(path: string, params: Record<string, string>): string {
   return `${assetUrl(path)}?${qs}`;
 }
 
+/** Reflect the current region + k into the location query (shareable / reloadable). */
+function syncUrl(): void {
+  if (typeof window === "undefined") return;
+  const { regionSlug, k } = useStore.getState();
+  if (!regionSlug) return;
+  const sp = new URLSearchParams(window.location.search);
+  sp.set("region", regionSlug);
+  sp.set("k", String(k));
+  window.history.replaceState(null, "", `${window.location.pathname}?${sp.toString()}`);
+}
+
 // --- Latest-wins request tracking for the clusters endpoint -----------------
 // Rapid slider changes fire overlapping requests; only the newest one should win.
 let computeSeq = 0;
@@ -71,6 +82,7 @@ function dispatchCompute(slug: string, k: number): void {
   const controller = new AbortController();
   inflight = controller;
   useStore.setState({ computeStatus: "computing", computeError: undefined });
+  syncUrl();
 
   fetch(apiUrl("/api/clusters", { region: slug, k: String(k) }), {
     signal: controller.signal,
@@ -119,16 +131,32 @@ export const useStore = create<AppState>((set, get) => ({
 
   init: async () => {
     if (get().manifest) return;
+
+    // Seed region + k from the URL query (?region=…&k=…) if present.
+    let urlRegion: string | null = null;
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      urlRegion = sp.get("region");
+      const urlK = Number(sp.get("k"));
+      if (Number.isFinite(urlK) && urlK > 0) {
+        set({ k: Math.max(K_MIN, Math.min(K_MAX, urlK)) });
+      }
+    }
+
     try {
       const res = await fetch(regionsManifestUrl());
       if (!res.ok) throw new Error(`manifest HTTP ${res.status}`);
       const manifest: RegionsManifest = await res.json();
       set({ manifest });
-      // default to the most populous region by node count for a good first view
-      const first =
+      // honour ?region= if valid, else default to the most populous region
+      const fromUrl = urlRegion
+        ? manifest.regions.find((r) => r.slug === urlRegion)
+        : undefined;
+      const target =
+        fromUrl ??
         [...manifest.regions].sort((a, b) => b.nodeCount - a.nodeCount)[0] ??
         manifest.regions[0];
-      if (first) await get().selectRegion(first.slug);
+      if (target) await get().selectRegion(target.slug);
     } catch (err) {
       set({
         dataStatus: "error",

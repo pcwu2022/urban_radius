@@ -39,7 +39,16 @@ RESOLUTIONS = {
 # plus a map view (centre + zoom) the app flies to when the region is selected.
 # A hexagon centroid is included in every region whose bbox contains it.
 # ---------------------------------------------------------------------------
+# Hexagons below this population are dropped during extraction (rural noise).
+MIN_POPULATION = 1000
+
 REGIONS = {
+    "world": {
+        "name": "World",
+        "bbox": [-180.0, -90.0, 180.0, 90.0],
+        "center": [10.0, 25.0],
+        "zoom": 1.4,
+    },
     "north-america": {
         "name": "North America",
         "bbox": [-170.0, 7.0, -52.0, 72.0],
@@ -134,7 +143,7 @@ def main():
 
     for geom, h3, pop in cur.execute("SELECT geom, h3, population FROM population"):
         total_rows += 1
-        if pop is None or pop <= 0:
+        if pop is None or pop < MIN_POPULATION:
             continue
         lng, lat = gpb_centroid(geom)
         feature = {

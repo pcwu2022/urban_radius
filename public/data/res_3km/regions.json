@@ -2,6 +2,22 @@
   "resolutionId": "3km",
   "regions": [
     {
+      "slug": "world",
+      "name": "World",
+      "bbox": [
+        -180.0,
+        -90.0,
+        180.0,
+        90.0
+      ],
+      "center": [
+        10.0,
+        25.0
+      ],
+      "zoom": 1.4,
+      "nodeCount": 641655
+    },
+    {
       "slug": "north-america",
       "name": "North America",
       "bbox": [
@@ -15,7 +31,7 @@
         40.0
       ],
       "zoom": 3,
-      "nodeCount": 317745
+      "nodeCount": 60288
     },
     {
       "slug": "south-america",
@@ -31,7 +47,7 @@
         -20.0
       ],
       "zoom": 3,
-      "nodeCount": 294028
+      "nodeCount": 38298
     },
     {
       "slug": "europe",
@@ -47,7 +63,7 @@
         52.0
       ],
       "zoom": 3.5,
-      "nodeCount": 260134
+      "nodeCount": 96115
     },
     {
       "slug": "africa",
@@ -63,7 +79,7 @@
         5.0
       ],
       "zoom": 3,
-      "nodeCount": 548975
+      "nodeCount": 190283
     },
     {
       "slug": "asia",
@@ -79,7 +95,7 @@
         35.0
       ],
       "zoom": 3,
-      "nodeCount": 472370
+      "nodeCount": 250977
     },
     {
       "slug": "oceania",
@@ -95,7 +111,7 @@
         -28.0
       ],
       "zoom": 3.5,
-      "nodeCount": 92356
+      "nodeCount": 5457
     }
   ]
 }

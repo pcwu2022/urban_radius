@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { ACTIVE_CONFIG } from "@/lib/dataConfig";
 import { formatKm, formatPop } from "@/lib/format";
 import { K_MAX, K_MIN, useStore } from "@/lib/store";
+import { MathBlock, MathInline } from "@/components/Math";
 
 // The slider is linear in position but logarithmic in k, since k's effect spans
 // orders of magnitude. Position runs 0..SLIDER_STEPS and maps to [K_MIN, K_MAX].
@@ -47,6 +48,8 @@ export default function Sidebar() {
   const [kDisplay, setKDisplay] = useState(k);
   useEffect(() => setKDisplay(k), [k]);
 
+  const [showDetails, setShowDetails] = useState(false);
+
   const commit = () => {
     if (kDisplay !== k) setK(kDisplay);
   };
@@ -87,6 +90,74 @@ export default function Sidebar() {
           metros; higher k shrinks them into dense cores. Release the slider to
           re-run the algorithm.
         </p>
+
+        <button
+          type="button"
+          onClick={() => setShowDetails((v) => !v)}
+          className="mt-2 flex items-center gap-1 text-xs font-medium text-rose-600 hover:text-rose-700"
+          aria-expanded={showDetails}
+        >
+          <span className={`transition-transform ${showDetails ? "rotate-90" : ""}`}>
+            ▶
+          </span>
+          {showDetails ? "Hide" : "How the index is computed"}
+        </button>
+
+        {showDetails && (
+          <div className="mt-2 space-y-2 rounded-md bg-slate-50 p-3 text-xs leading-relaxed text-slate-600">
+            <p>
+              For a candidate centre <MathInline tex="c" /> and radius{" "}
+              <MathInline tex="r" />, let <MathInline tex="P(r,c)" /> be the total
+              population within distance <MathInline tex="r" />. The{" "}
+              <b>cumulative density</b> is
+            </p>
+            <MathBlock tex="\rho(r,c) = \dfrac{P(r,c)}{\pi r^2}\quad[\text{people}/\text{km}^2]." />
+            <p>
+              The <b>Urban Radius</b> <MathInline tex="R(c)" /> is the largest{" "}
+              <MathInline tex="r" /> for which density stays above the linear
+              threshold <MathInline tex="k\,r" /> everywhere up to it:
+            </p>
+            <MathBlock tex="R(c) = \sup\{\, r : \rho(r',c) > k\,r'\ \ \forall\, r' \le r \,\}." />
+            <p>
+              Since <MathInline tex="\rho" /> is non-increasing and{" "}
+              <MathInline tex="k r" /> increases, the difference{" "}
+              <MathInline tex="\rho(r,c)-k r" /> crosses zero at most once, so{" "}
+              <MathInline tex="R(c)" /> is unique. At the crossing the contained
+              population <MathInline tex="P" /> satisfies{" "}
+              <MathInline tex="P/(\pi R^2)=kR" />, i.e.
+            </p>
+            <MathBlock tex="R(c) = \left(\dfrac{P}{\pi k}\right)^{1/3}." />
+            <p>
+              <b>Finding centres (mean-shift).</b> From each seed we iterate toward
+              the population-weighted centroid of the nodes inside{" "}
+              <MathInline tex="R(c)" />, with damping{" "}
+              <MathInline tex="0<\alpha\le 1" />:
+            </p>
+            <MathBlock tex="c_{t+1} = c_t + \alpha\,\big(\bar c_{R(c_t)} - c_t\big)," />
+            <p>
+              where{" "}
+              <MathInline tex="\bar c_{R} = \dfrac{\sum_i p_i\,x_i}{\sum_i p_i}" />{" "}
+              over member nodes <MathInline tex="i" />. The bandwidth{" "}
+              <MathInline tex="R" /> is recomputed every step, so the search is
+              self-tuning. Iteration stops when the centre moves less than{" "}
+              <MathInline tex="\varepsilon" />.
+            </p>
+            <p>
+              <b>Seeding.</b> One seed per local population maximum (highest node in
+              its grid neighbourhood), so results are deterministic.
+            </p>
+            <p>
+              <b>Merging.</b> Two clusters merge when their disks overlap,
+            </p>
+            <MathBlock tex="\operatorname{dist}(c_i,c_j) < R_i + R_j," />
+            <p>
+              applied transitively (connected components) and repeated until a pass
+              makes no merges — guaranteed to terminate as the cluster count strictly
+              decreases. Finally, clusters with{" "}
+              <MathInline tex="R < 1\,\text{km}" /> are dropped.
+            </p>
+          </div>
+        )}
       </section>
 
       {/* results */}
