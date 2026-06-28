@@ -18,7 +18,7 @@ import "server-only";
 import fs from "fs";
 import path from "path";
 
-import { haversineKm, runAlgorithm } from "./algorithm";
+import { haversineKm, runAlgorithm, type ProgressCallback } from "./algorithm";
 import { ACTIVE_CONFIG } from "./dataConfig";
 import type {
   Cluster,
@@ -47,6 +47,13 @@ const SLUG_RE = /^[a-z0-9-]+$/;
 const nodeCache = new Map<string, PopNode[]>();
 const clusterCache = new Map<string, WorkerOutput>();
 let cityNames: NamedCity[] | null = null;
+
+export interface ComputeOptions {
+  overlapFactor?: number;
+  /** minRadiusKm override; if not provided, defaults to the resolution floor. */
+  minRadiusKm?: number;
+  onProgress?: ProgressCallback;
+}
 
 export function isValidSlug(slug: string): boolean {
   return SLUG_RE.test(slug);
@@ -119,19 +126,31 @@ function loadCityNames(): NamedCity[] {
  * takes the city's name and is marked named; a city inside an already-named cluster
  * is skipped. Thus every cluster is named after the largest city it contains. Stop
  * once every cluster is named or the list is exhausted.
+ *
+ * Also stores `matchedCity` on the cluster with real-world position, population,
+ * and gazetteer rank (1-indexed), for display in the sidebar and map.
  */
 function nameClusters(clusters: Cluster[]): void {
   if (clusters.length === 0) return;
   const cities = loadCityNames();
   let remaining = clusters.length;
 
-  for (const city of cities) {
+  for (let cityIdx = 0; cityIdx < cities.length; cityIdx++) {
     if (remaining === 0) break; // all clusters named
+    const city = cities[cityIdx];
     for (let i = 0; i < clusters.length; i++) {
       const c = clusters[i];
       if (c.name !== undefined) continue; // already named
       if (haversineKm(city.lon, city.lat, c.center.lng, c.center.lat) <= c.radiusKm) {
         c.name = city.name;
+        c.matchedCity = {
+          name: city.name,
+          country: city.country,
+          lat: city.lat,
+          lon: city.lon,
+          pop: city.pop,
+          rank: cityIdx + 1, // 1-indexed
+        };
         remaining--;
         break; // a city names at most one cluster
       }
@@ -140,20 +159,43 @@ function nameClusters(clusters: Cluster[]): void {
 }
 
 /** Run (or reuse a cached) clustering for a region at a given k. */
-export function computeClusters(slug: string, k: number): WorkerOutput {
-  const key = `${slug}:${k.toPrecision(5)}`;
-  const cached = clusterCache.get(key);
-  if (cached) return cached;
+export function computeClusters(
+  slug: string,
+  k: number,
+  options: ComputeOptions = {}
+): WorkerOutput {
+  const { overlapFactor, minRadiusKm, onProgress } = options;
+
+  // Only cache when no streaming callback is active and using default params
+  const isDefault =
+    !onProgress &&
+    (overlapFactor === undefined || overlapFactor === 0.5) &&
+    (minRadiusKm === undefined || minRadiusKm === MIN_RADIUS_KM);
+  const key = isDefault
+    ? `${slug}:${k.toPrecision(5)}`
+    : null;
+
+  if (key) {
+    const cached = clusterCache.get(key);
+    if (cached) return cached;
+  }
 
   const nodes = loadRegionNodes(slug);
-  const out = runAlgorithm({
-    nodes,
-    k,
-    epsilon: EPSILON_KM,
-    alpha: ALPHA,
-    minRadiusKm: MIN_RADIUS_KM,
-  });
+  const out = runAlgorithm(
+    {
+      nodes,
+      k,
+      epsilon: EPSILON_KM,
+      alpha: ALPHA,
+      minRadiusKm: minRadiusKm ?? MIN_RADIUS_KM,
+      overlapFactor: overlapFactor ?? 0.5,
+    },
+    onProgress
+  );
   nameClusters(out.clusters);
-  clusterCache.set(key, out);
+
+  if (key) {
+    clusterCache.set(key, out);
+  }
   return out;
 }

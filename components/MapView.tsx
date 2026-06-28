@@ -1,11 +1,13 @@
 "use client";
 
 /**
- * The interactive map (spec.md Section 7). Renders three layers over a tracking-free
+ * The interactive map (spec.md Section 7). Renders layers over a tracking-free
  * raster basemap:
- *   - Layer 1: population points  (WebGL circle layer, styled by `population`)
- *   - Layer 2a: city R boundaries (geodesic circles from @turf/circle, line + fill)
- *   - Layer 2b: city centres      (marker circle layer)
+ *   - Layer 1:  population points      (WebGL circle layer, styled by `population`)
+ *   - Layer 2a: city R boundaries      (geodesic circles from @turf/circle, line + fill)
+ *   - Layer 2b: city centres           (marker circle layer, red)
+ *   - Layer 2c: city name labels
+ *   - Layer 3:  real city positions    (gazetteer dots, blue — toggleable)
  *
  * The MapLibre map is created once. Store changes only push data into existing
  * sources / update paint properties, so pan & zoom never trigger recomputation.
@@ -43,6 +45,7 @@ const BASE_STYLE: StyleSpecification = {
 const SRC_POP = "population";
 const SRC_CIRCLES = "city-circles";
 const SRC_CENTERS = "city-centers";
+const SRC_REAL_CITIES = "real-cities";
 
 function popFeatureCollection(nodes: PopNode[]) {
   return {
@@ -91,6 +94,30 @@ function centersFeatureCollection(clusters: Cluster[]) {
   };
 }
 
+/** Real (gazetteer) city positions for clusters that have a matched city. */
+function realCitiesFeatureCollection(clusters: Cluster[]) {
+  return {
+    type: "FeatureCollection" as const,
+    features: clusters
+      .filter((c) => c.matchedCity !== undefined)
+      .map((c) => ({
+        type: "Feature" as const,
+        geometry: {
+          type: "Point" as const,
+          coordinates: [c.matchedCity!.lon, c.matchedCity!.lat],
+        },
+        properties: {
+          id: c.id,
+          name: c.matchedCity!.name,
+          country: c.matchedCity!.country,
+          realPop: c.matchedCity!.pop,
+          rank: c.matchedCity!.rank,
+          calcPop: c.totalPopulation,
+        },
+      })),
+  };
+}
+
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MlMap | null>(null);
@@ -131,6 +158,7 @@ export default function MapView() {
       map.addSource(SRC_POP, { type: "geojson", data: popFeatureCollection([]) });
       map.addSource(SRC_CIRCLES, { type: "geojson", data: circlesFeatureCollection([]) });
       map.addSource(SRC_CENTERS, { type: "geojson", data: centersFeatureCollection([]) });
+      map.addSource(SRC_REAL_CITIES, { type: "geojson", data: realCitiesFeatureCollection([]) });
 
       // Layer 1: population points
       map.addLayer({
@@ -177,7 +205,7 @@ export default function MapView() {
         paint: { "line-color": "#e11d48", "line-width": 2, "line-opacity": 0.9 },
       });
 
-      // Layer 2b: city centres
+      // Layer 2b: city centres (algorithm result — red)
       map.addLayer({
         id: "city-centers",
         type: "circle",
@@ -212,17 +240,52 @@ export default function MapView() {
         },
       });
 
+      // Layer 3: Real (gazetteer) city positions — distinct blue/teal dots
+      map.addLayer({
+        id: "real-city-dots",
+        type: "circle",
+        source: SRC_REAL_CITIES,
+        paint: {
+          "circle-radius": 6,
+          "circle-color": "#0ea5e9",
+          "circle-stroke-color": "#ffffff",
+          "circle-stroke-width": 2,
+          "circle-opacity": 0.9,
+        },
+      });
+
+      // Layer 3b: Real city name labels
+      map.addLayer({
+        id: "real-city-labels",
+        type: "symbol",
+        source: SRC_REAL_CITIES,
+        layout: {
+          "text-field": ["get", "name"],
+          "text-font": ["Open Sans Regular"],
+          "text-size": 11,
+          "text-offset": [0, -1.2],
+          "text-anchor": "bottom",
+          "text-allow-overlap": false,
+          "text-optional": true,
+        },
+        paint: {
+          "text-color": "#0369a1",
+          "text-halo-color": "#ffffff",
+          "text-halo-width": 1.5,
+        },
+      });
+
       readyRef.current = true;
       // push whatever is already in the store
       const s = useStore.getState();
       pushData(map, s.nodes, s.clusters);
       applyDim(map, s.computeStatus === "computing");
+      applyRealCitiesVisibility(map, s.showRealCities);
 
-      // Clicking anywhere inside a cluster's disk (fill) — or its centre dot —
-      // opens a popup. The fill makes the whole circle clickable, not just the
-      // small centre marker.
+      // Clicking a real city dot opens an info popup
       const popup = new maplibregl.Popup({ closeButton: false, offset: 10 });
-      const showPopup = (e: maplibregl.MapLayerMouseEvent) => {
+
+      const showClusterPopup = (e: maplibregl.MapLayerMouseEvent) => {
         const f = e.features?.[0];
         if (!f) return;
         const p = f.properties as {
@@ -247,8 +310,37 @@ export default function MapView() {
           )
           .addTo(map);
       };
+
+      const showRealCityPopup = (e: maplibregl.MapLayerMouseEvent) => {
+        const f = e.features?.[0];
+        if (!f) return;
+        const p = f.properties as {
+          name: string;
+          country: string;
+          realPop: number;
+          rank: number;
+          calcPop: number;
+        };
+        const coverage = p.calcPop > 0 && p.realPop > 0
+          ? `${((p.calcPop / p.realPop) * 100).toFixed(0)}%`
+          : "–";
+        const coords = (f.geometry as GeoJSON.Point).coordinates as [number, number];
+        popup
+          .setLngLat(coords)
+          .setHTML(
+            `<div style="font:12px system-ui">` +
+            `<b style="color:#0369a1">📍 ${escapeHtml(p.name)} (${escapeHtml(p.country)})</b><br/>` +
+            `<span style="color:#555">Real position</span><br/>` +
+            `Real pop: ${formatPop(Number(p.realPop))}<br/>` +
+            `Calc pop: ${formatPop(Number(p.calcPop))} (${coverage} of real)<br/>` +
+            `Gazetteer rank: #${p.rank}` +
+            `</div>`
+          )
+          .addTo(map);
+      };
+
       for (const layer of ["city-fill", "city-centers"]) {
-        map.on("click", layer, showPopup);
+        map.on("click", layer, showClusterPopup);
         map.on("mouseenter", layer, () => {
           map.getCanvas().style.cursor = "pointer";
         });
@@ -256,6 +348,14 @@ export default function MapView() {
           map.getCanvas().style.cursor = "";
         });
       }
+
+      map.on("click", "real-city-dots", showRealCityPopup);
+      map.on("mouseenter", "real-city-dots", () => {
+        map.getCanvas().style.cursor = "pointer";
+      });
+      map.on("mouseleave", "real-city-dots", () => {
+        map.getCanvas().style.cursor = "";
+      });
     });
 
     return () => {
@@ -273,6 +373,7 @@ export default function MapView() {
   const dataStatus = useStore((s) => s.dataStatus);
   const regionSlug = useStore((s) => s.regionSlug);
   const activeRegion = useStore((s) => s.activeRegion);
+  const showRealCities = useStore((s) => s.showRealCities);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -285,6 +386,12 @@ export default function MapView() {
     if (!map || !readyRef.current) return;
     applyDim(map, computeStatus === "computing");
   }, [computeStatus]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current) return;
+    applyRealCitiesVisibility(map, showRealCities);
+  }, [showRealCities]);
 
   // fly to region on selection change
   useEffect(() => {
@@ -327,6 +434,9 @@ function pushData(map: MlMap, nodes: PopNode[], clusters: Cluster[]) {
   (map.getSource(SRC_CENTERS) as maplibregl.GeoJSONSource | undefined)?.setData(
     centersFeatureCollection(clusters)
   );
+  (map.getSource(SRC_REAL_CITIES) as maplibregl.GeoJSONSource | undefined)?.setData(
+    realCitiesFeatureCollection(clusters)
+  );
 }
 
 /** Dim the cluster layers while a recomputation is in flight (Section 6.2). */
@@ -339,6 +449,15 @@ function applyDim(map: MlMap, computing: boolean) {
     map.setPaintProperty("city-outline", "line-opacity", line);
   if (map.getLayer("city-centers"))
     map.setPaintProperty("city-centers", "circle-opacity", center);
+}
+
+/** Show or hide the real city position layers. */
+function applyRealCitiesVisibility(map: MlMap, visible: boolean) {
+  const v = visible ? "visible" : "none";
+  if (map.getLayer("real-city-dots"))
+    map.setLayoutProperty("real-city-dots", "visibility", v);
+  if (map.getLayer("real-city-labels"))
+    map.setLayoutProperty("real-city-labels", "visibility", v);
 }
 
 function formatPop(n: number): string {

@@ -7,6 +7,18 @@ export interface PopNode {
   population: number;
 }
 
+/** Real-world city data matched from the gazetteer to this cluster. */
+export interface MatchedCity {
+  name: string;
+  country: string;
+  lat: number;
+  lon: number;
+  /** Real population from the gazetteer (cities50000.json). */
+  pop: number;
+  /** 1-indexed rank in the gazetteer sorted by population descending. */
+  rank: number;
+}
+
 /** A detected city: a converged centre and its Urban Radius. */
 export interface Cluster {
   id: string;
@@ -16,6 +28,8 @@ export interface Cluster {
   memberNodeCount: number;
   /** Assumed city name (nearest large gazetteer city inside the disk), if any. */
   name?: string;
+  /** Full gazetteer match data (position, real population, rank). */
+  matchedCity?: MatchedCity;
 }
 
 /** A gazetteer entry from public/data/city_names (GeoNames-style). */
@@ -73,6 +87,13 @@ export interface WorkerInput {
    * defaults to a small floor in the algorithm.
    */
   minRadiusKm?: number;
+  /**
+   * Multiplier in the merge criterion: merge if dist < (Ri + Rj) * overlapFactor.
+   * 0.5 = requires 50% overlap (more aggressive merging),
+   * 1.0 = merge only when disks just touch (less aggressive).
+   * Defaults to 0.5.
+   */
+  overlapFactor?: number;
 }
 
 export interface WorkerOutput {
@@ -82,3 +103,9 @@ export interface WorkerOutput {
     executionTimeMs: number;
   };
 }
+
+/** SSE event types streamed from /api/clusters */
+export type ClusterSSEEvent =
+  | { type: "progress"; pass: number; clusters: Cluster[] }
+  | { type: "done"; clusters: Cluster[]; meta: WorkerOutput["meta"] }
+  | { type: "error"; message: string };

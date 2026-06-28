@@ -287,7 +287,7 @@ function findSeeds(grid: SpatialGrid): number[] {
   // -------------------------------------------------------------------------
   // SCALING COEFFICIENT: Adjust this to change seeding density.
   // 0.1 scales a 296km spacing down to ~29.6km per cell.
-  // A smaller coefficient = smaller cells = more seeds (closer cities caught).
+  // A smaller coefficient = smaller cells = more seeds (closer cities caught)
   // -------------------------------------------------------------------------
   const RESOLUTION_COEFFICIENT = 1.0; 
   
@@ -375,7 +375,8 @@ function mergePass(
   clusters: WorkingCluster[],
   k: number,
   epsilon: number,
-  alpha: number
+  alpha: number,
+  overlapFactor: number
 ): { clusters: WorkingCluster[]; merged: boolean } {
   const n = clusters.length;
   const uf = new UnionFind(n);
@@ -390,8 +391,8 @@ function mergePass(
         cj.center.lng,
         cj.center.lat
       );
-      // merge iff the R-disks overlap at all (symmetric)
-      if (d < (ci.radiusKm + cj.radiusKm)*0.5) {
+      // merge iff the R-disks overlap by the configured factor
+      if (d < (ci.radiusKm + cj.radiusKm) * overlapFactor) {
         uf.union(i, j);
         anyEdge = true;
       }
@@ -440,12 +441,17 @@ function mergePass(
 // Full pipeline
 // ---------------------------------------------------------------------------
 
-export function runAlgorithm(input: WorkerInput): WorkerOutput {
+export type ProgressCallback = (clusters: Cluster[], pass: number) => void;
+
+export function runAlgorithm(input: WorkerInput, onProgress?: ProgressCallback): WorkerOutput {
   const start = nowMs();
   const { nodes, k } = input;
   const epsilon = input.epsilon > 0 ? input.epsilon : 0.05;
   const alpha = input.alpha > 0 && input.alpha <= 1 ? input.alpha : 1;
   const minRadiusKm = input.minRadiusKm && input.minRadiusKm > 0 ? input.minRadiusKm : 0.5;
+  const overlapFactor = input.overlapFactor != null && input.overlapFactor > 0
+    ? input.overlapFactor
+    : 0.5;
 
   const grid = new SpatialGrid(nodes);
 
@@ -478,7 +484,13 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
   // 3. merge until a full pass produces zero merges
   let clusters = filtered;
   for (let pass = 0; pass < clusters.length + 1; pass++) {
-    const res = mergePass(grid, clusters, k, epsilon, alpha);
+    // Emit a progress snapshot BEFORE this merge pass (so the UI sees current state)
+    if (onProgress) {
+      const snapshot = clustersToOutput(clusters, minRadiusKm, pass);
+      onProgress(snapshot, pass);
+    }
+
+    const res = mergePass(grid, clusters, k, epsilon, alpha, overlapFactor);
     clusters = res.clusters;
     console.log(`runAlgorithm: ${clusters.length} clusters after merge pass ${pass + 1}, ${Math.round(nowMs() - start)} ms`);
     if (!res.merged) break;
@@ -486,7 +498,23 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
   console.log(`runAlgorithm: ${clusters.length} clusters after merge, ${Math.round(nowMs() - start)} ms`);
 
   // finalize: drop empties and sub-resolution cities, sort by population desc
-  const out: Cluster[] = clusters
+  const out: Cluster[] = clustersToOutput(clusters, minRadiusKm, -1);
+
+  console.log(`runAlgorithm: ${out.length} clusters after merge, ${Math.round(nowMs() - start)} ms`);
+
+  return {
+    clusters: out,
+    meta: { seedCount: seeds.length, executionTimeMs: Math.round(nowMs() - start) },
+  };
+}
+
+/** Convert WorkingCluster[] to the final Cluster[] format (sorted, filtered). */
+function clustersToOutput(
+  clusters: WorkingCluster[],
+  minRadiusKm: number,
+  _pass: number
+): Cluster[] {
+  return clusters
     .filter(
       (c) =>
         c.radiusKm >= minRadiusKm &&
@@ -501,13 +529,6 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
       totalPopulation: Math.round(c.totalPopulation),
       memberNodeCount: c.memberIdx.length,
     }));
-
-  console.log(`runAlgorithm: ${out.length} clusters after merge, ${Math.round(nowMs() - start)} ms`);
-
-  return {
-    clusters: out,
-    meta: { seedCount: seeds.length, executionTimeMs: Math.round(nowMs() - start) },
-  };
 }
 
 /** Collapse clusters whose centres fall within `epsilon` km of each other. */
