@@ -156,7 +156,7 @@ The data is sourced from the **Kontur Population Dataset**, which tracks Global 
 
 ### 5.2 Resolution Configuration Matrix
 
-To allow swapping out resolutions seamlessly (e.g., migrating from the default 22km hexagons down to 3km or 400m fine grids), the system abstracts data ingestion behind explicit configuration environments.
+To allow swapping out resolutions seamlessly (e.g., migrating from the default 3km hexagons to 22km or 400m fine grids), the system abstracts data ingestion behind explicit configuration environments.
 
 Create a configuration file at `/lib/dataConfig.ts`:
 

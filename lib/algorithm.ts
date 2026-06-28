@@ -128,21 +128,30 @@ function clamp(x: number, lo: number, hi: number): number {
 /** Median nearest-neighbour distance over a sample of nodes (km). */
 function estimateSpacingKm(nodes: PopNode[]): number {
   if (nodes.length < 2) return 25;
+  
+  // A sample size of 200–500 is plenty for an accurate median calibration
   const sampleSize = Math.min(200, nodes.length);
   const step = Math.max(1, Math.floor(nodes.length / sampleSize));
   const nn: number[] = [];
+  
+  // Outer loop: Sample a sparse set of nodes to test
   for (let i = 0; i < nodes.length; i += step) {
     const a = nodes[i];
     let best = Infinity;
-    // brute-force nearest over another sparse sample (cheap, only for calibration)
-    for (let j = 0; j < nodes.length; j += step) {
+    
+    // Inner loop: MUST check against ALL nodes (j++) to find the TRUE closest neighbor
+    for (let j = 0; j < nodes.length; j++) { 
       if (i === j) continue;
       const b = nodes[j];
+      
       const d = haversineKm(a.lng, a.lat, b.lng, b.lat);
-      if (d < best) best = d;
+      if (d < best) {
+        best = d;
+      }
     }
     if (isFinite(best)) nn.push(best);
   }
+  
   if (!nn.length) return 25;
   nn.sort((x, y) => x - y);
   return nn[Math.floor(nn.length / 2)] || 25;
@@ -272,30 +281,28 @@ function meanShift(
   };
 }
 
-// ---------------------------------------------------------------------------
-// Seeding — local maxima of population density (Section 1.4)
-// ---------------------------------------------------------------------------
-
-/**
- * Grid-based local-maximum seeding (Section 1.4 permits a grid-based check).
- *
- * A node seeds a candidate city iff it is the highest-population node in its 3×3
- * block of grid cells (cells ≈ one node-spacing, so the block ≈ the immediate
- * neighbour ring). Ties broken by lowest index for determinism. This is near-O(N)
- * — a per-cell "best node" pass then a 9-cell lookup per node — which keeps seeding
- * fast even at the ~0.5M-node scale of the 3 km grid (the haversine-per-node version
- * was the dominant cost there).
- */
 function findSeeds(grid: SpatialGrid): number[] {
   const nodes = grid.nodes;
-  const cellDeg = Math.max(grid.spacingKm / 111, 1e-4);
-  type Best = { pop: number; idx: number };
 
-  // best (max population, lowest index on tie) node per cell
+  // -------------------------------------------------------------------------
+  // SCALING COEFFICIENT: Adjust this to change seeding density.
+  // 0.1 scales a 296km spacing down to ~29.6km per cell.
+  // A smaller coefficient = smaller cells = more seeds (closer cities caught).
+  // -------------------------------------------------------------------------
+  const RESOLUTION_COEFFICIENT = 1.0; 
+  
+  // Compute the scaled cell size in kilometers, then convert to degrees
+  const scaledSpacingKm = grid.spacingKm * RESOLUTION_COEFFICIENT;
+  const cellDeg = Math.max(scaledSpacingKm / 111, 1e-4);
+
+  type Best = { pop: number; idx: number };
   const cellBest = new Map<string, Best>();
+
+  // Pass 1: Find the local champion inside each scaled grid cell
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
     if (n.population <= 0) continue;
+
     const key = `${Math.floor(n.lng / cellDeg)},${Math.floor(n.lat / cellDeg)}`;
     const b = cellBest.get(key);
     if (!b || n.population > b.pop || (n.population === b.pop && i < b.idx)) {
@@ -303,15 +310,17 @@ function findSeeds(grid: SpatialGrid): number[] {
     }
   }
 
-  // a node is a seed iff it is the best node across its 3×3 cell block
+  // Pass 2: A node is a seed if it beats all champions in its 3×3 cell block
   const seeds: number[] = [];
   for (let i = 0; i < nodes.length; i++) {
     const n = nodes[i];
     if (n.population <= 0) continue;
+
     const cx = Math.floor(n.lng / cellDeg);
     const cy = Math.floor(n.lat / cellDeg);
     let bestPop = n.population;
     let bestIdx = i;
+
     for (let dy = -1; dy <= 1; dy++) {
       for (let dx = -1; dx <= 1; dx++) {
         const b = cellBest.get(`${cx + dx},${cy + dy}`);
@@ -442,6 +451,7 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
 
   // 1. seeds
   const seeds = findSeeds(grid);
+  console.log(`runAlgorithm: ${nodes.length} nodes, ${seeds.length} seeds, spacing ${grid.spacingKm.toFixed(2)} km`);
 
   // 2. mean-shift from every seed
   const raw: WorkingCluster[] = [];
@@ -452,18 +462,28 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
       raw.push(shifted);
     }
   }
+  console.log(`runAlgorithm: ${raw.length} clusters after mean-shift, ${Math.round(nowMs() - start)} ms`);
 
   // Pre-dedup near-identical centres (they would merge anyway) to speed up the
   // O(M²) merge passes. Bucket centres onto a fine grid keyed by epsilon.
   const deduped = dedupeClusters(raw, epsilon);
+  // const deduped = raw;
+  console.log(`runAlgorithm: ${deduped.length} clusters after dedupe, ${Math.round(nowMs() - start)} ms`);
 
+
+  // Discard clusters with only one member node (they are degenerate and will merge anyway)
+  const filtered = deduped.filter((c) => c.memberIdx.length > 1);
+  console.log(`runAlgorithm: ${filtered.length} clusters after filtering singletons, ${Math.round(nowMs() - start)} ms`);
+  
   // 3. merge until a full pass produces zero merges
-  let clusters = deduped;
+  let clusters = filtered;
   for (let pass = 0; pass < clusters.length + 1; pass++) {
     const res = mergePass(grid, clusters, k, epsilon, alpha);
     clusters = res.clusters;
+    console.log(`runAlgorithm: ${clusters.length} clusters after merge pass ${pass + 1}, ${Math.round(nowMs() - start)} ms`);
     if (!res.merged) break;
   }
+  console.log(`runAlgorithm: ${clusters.length} clusters after merge, ${Math.round(nowMs() - start)} ms`);
 
   // finalize: drop empties and sub-resolution cities, sort by population desc
   const out: Cluster[] = clusters
@@ -481,6 +501,8 @@ export function runAlgorithm(input: WorkerInput): WorkerOutput {
       totalPopulation: Math.round(c.totalPopulation),
       memberNodeCount: c.memberIdx.length,
     }));
+
+  console.log(`runAlgorithm: ${out.length} clusters after merge, ${Math.round(nowMs() - start)} ms`);
 
   return {
     clusters: out,

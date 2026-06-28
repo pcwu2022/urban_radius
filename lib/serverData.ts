@@ -30,8 +30,8 @@ import type {
 
 const EPSILON_KM = 0.05;
 const ALPHA = 1;
-// Discard cities below 10% of one hexagon edge, but never below a 1 km hard floor.
-const MIN_RADIUS_KM = Math.max(1, ACTIVE_CONFIG.averageEdgeLengthKm * 0.1);
+// Discard cities below of one hexagon edge
+const MIN_RADIUS_KM = ACTIVE_CONFIG.averageEdgeLengthKm;
 
 // Gazetteer used to label detected clusters with assumed city names.
 const CITY_NAMES_FILE = "data/city_names/cities50000.json";
