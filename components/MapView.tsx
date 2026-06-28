@@ -245,6 +245,9 @@ export default function MapView() {
         id: "real-city-dots",
         type: "circle",
         source: SRC_REAL_CITIES,
+        layout: {
+          visibility: useStore.getState().showRealCities ? "visible" : "none",
+        },
         paint: {
           "circle-radius": 6,
           "circle-color": "#0ea5e9",
@@ -267,6 +270,7 @@ export default function MapView() {
           "text-anchor": "bottom",
           "text-allow-overlap": false,
           "text-optional": true,
+          visibility: useStore.getState().showRealCities ? "visible" : "none",
         },
         paint: {
           "text-color": "#0369a1",
@@ -374,6 +378,7 @@ export default function MapView() {
   const regionSlug = useStore((s) => s.regionSlug);
   const activeRegion = useStore((s) => s.activeRegion);
   const showRealCities = useStore((s) => s.showRealCities);
+  const selectedClusterId = useStore((s) => s.selectedClusterId);
 
   useEffect(() => {
     const map = mapRef.current;
@@ -392,6 +397,19 @@ export default function MapView() {
     if (!map || !readyRef.current) return;
     applyRealCitiesVisibility(map, showRealCities);
   }, [showRealCities]);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map || !readyRef.current || !selectedClusterId) return;
+    const cluster = clusters.find(c => c.id === selectedClusterId);
+    if (cluster) {
+      map.flyTo({
+        center: [cluster.center.lng, cluster.center.lat],
+        zoom: 9, // Reasonable zoom for a city level
+        duration: 1200
+      });
+    }
+  }, [selectedClusterId, clusters]);
 
   // fly to region on selection change
   useEffect(() => {

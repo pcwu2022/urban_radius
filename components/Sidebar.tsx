@@ -16,6 +16,7 @@ import {
   useStore,
 } from "@/lib/store";
 import { MathBlock, MathInline } from "@/components/Math";
+import { AboutModal } from "@/components/AboutModal";
 import type { Cluster } from "@/lib/types";
 
 // The k slider is linear in position but logarithmic in k.
@@ -50,15 +51,24 @@ function CoverageBar({ pct }: { pct: number }) {
 
 function ClusterCard({ cluster, rank }: { cluster: Cluster; rank: number }) {
   const [expanded, setExpanded] = useState(false);
+  const setSelectedClusterId = useStore((s) => s.setSelectedClusterId);
   const mc = cluster.matchedCity;
   const coveragePct = mc ? (cluster.totalPopulation / mc.pop) * 100 : null;
+
+  const handleExpand = () => {
+    const newExpanded = !expanded;
+    setExpanded(newExpanded);
+    if (newExpanded) {
+      setSelectedClusterId(cluster.id);
+    }
+  };
 
   return (
     <li className="rounded-lg border border-slate-100 bg-slate-50 text-xs overflow-hidden">
       {/* Header row — always visible */}
       <button
         type="button"
-        onClick={() => setExpanded((v) => !v)}
+        onClick={handleExpand}
         className="w-full px-2.5 py-1.5 text-left hover:bg-slate-100 transition-colors"
       >
         <div className="flex items-center justify-between gap-2">
@@ -197,6 +207,19 @@ export default function Sidebar() {
   useEffect(() => setMultDisplay(minRadiusMult), [minRadiusMult]);
 
   const [showDetails, setShowDetails] = useState(false);
+  const [aboutOpen, setAboutOpen] = useState(false);
+
+  useEffect(() => {
+    const hasSeenAbout = localStorage.getItem("hasSeenAboutUrbanRadius");
+    if (!hasSeenAbout) {
+      setAboutOpen(true);
+    }
+  }, []);
+
+  const handleCloseAbout = () => {
+    setAboutOpen(false);
+    localStorage.setItem("hasSeenAboutUrbanRadius", "true");
+  };
 
   const commitK = () => { if (kDisplay !== k) setK(kDisplay); };
   const commitOverlap = () => { if (overlapDisplay !== overlapFactor) setOverlapFactor(overlapDisplay); };
@@ -467,10 +490,19 @@ export default function Sidebar() {
         </dl>
         <p className="mt-3 leading-snug text-slate-400">
           Data processing and clustering run server-side on the full grid; the map
-          shows the densest {nodes.length.toLocaleString()} points for context.
+          Shows the densest {nodes.length.toLocaleString()} points for context.
           Cities are data-driven clusters, not administrative borders.
         </p>
+        <button
+          onClick={() => setAboutOpen(true)}
+          className="mt-3 flex items-center gap-1.5 text-slate-500 hover:text-slate-700 transition-colors"
+        >
+          <span className="text-sm">ℹ️</span>
+          <span className="underline decoration-slate-300 underline-offset-2">About Urban Radius (R)</span>
+        </button>
       </section>
+
+      <AboutModal isOpen={aboutOpen} onClose={handleCloseAbout} />
     </aside>
   );
 }

@@ -61,6 +61,7 @@ interface AppState {
 
   /** Whether to show the real (gazetteer) city positions layer on the map. */
   showRealCities: boolean;
+  selectedClusterId: string | null;
 
   init: () => Promise<void>;
   selectRegion: (slug: string) => Promise<void>;
@@ -70,6 +71,7 @@ interface AppState {
   recompute: () => void;
   activeRegion: () => RegionInfo | null;
   toggleRealCities: () => void;
+  setSelectedClusterId: (id: string | null) => void;
 }
 
 function apiUrl(path: string, params: Record<string, string>): string {
@@ -195,6 +197,7 @@ export const useStore = create<AppState>((set, get) => ({
   computeStatus: "idle",
 
   showRealCities: true,
+  selectedClusterId: null,
 
   activeRegion: () => {
     const { manifest, regionSlug } = get();
@@ -203,6 +206,7 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   toggleRealCities: () => set((s) => ({ showRealCities: !s.showRealCities })),
+  setSelectedClusterId: (id) => set({ selectedClusterId: id }),
 
   init: async () => {
     if (get().manifest) return;

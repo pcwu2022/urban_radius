@@ -62,7 +62,11 @@ This is mathematically very close to the "mean-shift" algorithm used in computer
 
 ### 1.4 Choosing where to start (seeding)
 
-The mean-shift procedure in Section 1.3 needs a starting point. To make results reproducible (not dependent on random starting guesses), seed at **every local maximum of population density** in the input data. Concretely: for each node, check whether its local population density is higher than its nearby neighbors' — if so, it's a seed. (A simple grid-based or k-nearest-neighbor-based local-maximum check is sufficient; this doesn't need to be sophisticated.)
+The mean-shift procedure in Section 1.3 needs a starting point. To make results reproducible (not dependent on random starting guesses), seed at **every local maximum of population density** in the input data. Concretely: 
+1. Estimate the median nearest-neighbor spacing of nodes.
+2. Divide the globe into cells scaled to this spacing.
+3. Pass 1: Find the most populous node (local champion) inside each cell.
+4. Pass 2: A node is a seed if it beats all champions in its surrounding 3×3 cell block.
 
 This is deterministic — the same input data always produces the same seed set — which means the final result also doesn't depend on arbitrary choices.
 
@@ -70,17 +74,18 @@ This is deterministic — the same input data always produces the same seed set 
 
 Running Section 1.3 from every seed produces a set of candidate (center, R) pairs. Some of these will be near-duplicates or overlapping — e.g., two seeds in the same metro area might converge to two nearby but distinct centers. These need to be merged into one city.
 
-**Merge rule:** Two clusters i and j (with centers c_i, c_j and radii R_i, R_j) should be merged if their R-disks overlap at all:
+**Merge rule:** Two clusters i and j (with centers c_i, c_j and radii R_i, R_j) should be merged if their R-disks overlap based on a configurable overlap factor `f` (default 0.5):
 
-> **merge(i, j) if and only if distance(c_i, c_j) < R_i + R_j**
+> **merge(i, j) if and only if distance(c_i, c_j) < (R_i + R_j) * f**
 
 This is symmetric (treats both clusters identically) and only triggers when there's genuine spatial overlap between the two detected urban regions.
 
 **Merging procedure (must be order-independent):**
 
+0. **Optimization (Deduplication):** Before the main merge loop, collapse clusters whose centers fall extremely close to each other (e.g. within an `epsilon` tolerance). Also discard singletons.
 1. Scan all pairs of current clusters and collect every pair that satisfies the merge condition above.
-2. Merge all flagged pairs *transitively* — if cluster A overlaps B, and B overlaps C, then A, B, and C all become one merged cluster (even if A and C don't directly overlap). This is exactly the "connected components" operation on a graph where clusters are nodes and overlap-pairs are edges.
-3. For each newly merged cluster, recompute its center and R by re-running the Section 1.3 procedure on the combined set of member nodes, starting from the combined centroid.
+2. Merge all flagged pairs *transitively* — if cluster A overlaps B, and B overlaps C, then A, B, and C all become one merged cluster (even if A and C don't directly overlap). This is exactly the "connected components" operation on a graph where clusters are nodes and overlap-pairs are edges (using Union-Find).
+3. For each newly merged cluster, recompute its center and R by re-running the Section 1.3 procedure (mean-shift) starting from the population-weighted centroid of the merged member centers.
 4. Repeat steps 1–3 (a full pass over all current clusters) until one entire pass produces zero merges.
 
 **Why this terminates:** The number of clusters is a positive integer that strictly decreases every time a merge happens. A strictly decreasing sequence of positive integers must reach a fixed point in a finite number of steps — so this process is guaranteed to terminate (in at most N−1 rounds, where N is the initial seed count).

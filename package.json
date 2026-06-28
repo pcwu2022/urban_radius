@@ -12,6 +12,7 @@
     "@turf/turf": "^7.1.0",
     "@types/katex": "^0.16.8",
     "katex": "^0.17.0",
+    "lucide-react": "^1.21.0",
     "maplibre-gl": "^4.7.1",
     "next": "14.2.29",
     "react": "^18",

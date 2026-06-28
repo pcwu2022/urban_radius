@@ -49,6 +49,19 @@ export async function GET(req: Request) {
   const { ACTIVE_CONFIG } = await import("@/lib/dataConfig");
   const minRadiusKm = ACTIVE_CONFIG.averageEdgeLengthKm * minRadiusMult;
 
+  const precomputedFileName = `${slug}_k${k}_o${overlapFactor}_m${minRadiusMult}.json`;
+  const precomputedFilePath = require("path").join(process.cwd(), "public", "data", "precomputed", precomputedFileName);
+  let precomputedOut: WorkerOutput | null = null;
+  
+  if (require("fs").existsSync(precomputedFilePath)) {
+    try {
+      const fileData = require("fs").readFileSync(precomputedFilePath, "utf-8");
+      precomputedOut = JSON.parse(fileData);
+    } catch (e) {
+      console.error("Failed to read precomputed file", e);
+    }
+  }
+
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const encoder = new TextEncoder();
@@ -68,18 +81,22 @@ export async function GET(req: Request) {
       }, 15000);
 
       try {
-        // Progress callback: called by the algorithm before each merge pass
-        const onProgress = (clusters: Cluster[], pass: number) => {
-          send({ type: "progress", pass, clusters });
-        };
+        if (precomputedOut) {
+          send({ type: "done", clusters: precomputedOut.clusters, meta: precomputedOut.meta });
+        } else {
+          // Progress callback: called by the algorithm before each merge pass
+          const onProgress = (clusters: Cluster[], pass: number) => {
+            send({ type: "progress", pass, clusters });
+          };
 
-        const out: WorkerOutput = computeClusters(slug, k, {
-          overlapFactor,
-          minRadiusKm,
-          onProgress,
-        });
+          const out: WorkerOutput = computeClusters(slug, k, {
+            overlapFactor,
+            minRadiusKm,
+            onProgress,
+          });
 
-        send({ type: "done", clusters: out.clusters, meta: out.meta });
+          send({ type: "done", clusters: out.clusters, meta: out.meta });
+        }
       } catch (err) {
         send({
           type: "error",
