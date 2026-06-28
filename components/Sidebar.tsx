@@ -82,8 +82,8 @@ export default function Sidebar() {
           className="w-full accent-rose-600 disabled:opacity-50"
         />
         <div className="mt-1 flex justify-between text-[10px] text-slate-400">
-          <span>{K_MIN} (large cities)</span>
-          <span>{K_MAX} (tight cores)</span>
+          <span>{K_MIN} (sprawling cities)</span>
+          <span>{K_MAX} (dense urban cores)</span>
         </div>
         <p className="mt-2 text-xs leading-snug text-slate-500">
           k is the density threshold (people/km³). Lower k grows radii and merges

@@ -24,8 +24,8 @@ import type {
 
 // k spans several orders of magnitude in effect, so the UI slider is logarithmic
 // over this range (see Sidebar).
-export const K_MIN = 1;
-export const K_MAX = 1000;
+export const K_MIN = 50;
+export const K_MAX = 5000;
 export const DEFAULT_K = 100;
 
 // Surfaced for display; the actual radius floor is applied server-side.
