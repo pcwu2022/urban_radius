@@ -391,7 +391,7 @@ function mergePass(
         cj.center.lat
       );
       // merge iff the R-disks overlap at all (symmetric)
-      if (d < ci.radiusKm + cj.radiusKm) {
+      if (d < (ci.radiusKm + cj.radiusKm)*0.5) {
         uf.union(i, j);
         anyEdge = true;
       }
